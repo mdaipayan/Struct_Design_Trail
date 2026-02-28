@@ -140,3 +140,83 @@ with colB:
 with colC:
     if st.button("3. Execute IS Code Design Checks", use_container_width=True):
         st.info("Optimization and penalty evaluation to be connected.")
+
+
+# It calculates the equivalent UDLs for every beam in your generated grid and assigns the loads directly to the element data. #
+st.divider()
+st.header("3. Slab Load Distribution (Yield Line Theory)")
+st.caption("Distributes floor area loads onto the 3D frame beams as equivalent UDLs.")
+
+colA, colB, colC = st.columns(3)
+with colA:
+    slab_thickness = st.number_input("Slab Thickness (mm)", value=150)
+    # Dead load: thickness * density of concrete (25 kN/m^3) + 1.5 kN/m^2 floor finish
+    dl_area = (slab_thickness / 1000.0) * 25.0 + 1.5 
+    st.info(f"**Calculated Dead Load (DL):** {dl_area:.2f} $kN/m^2$")
+with colB:
+    ll_area = st.number_input("Live Load (LL) ($kN/m^2$)", value=3.0, step=0.5)
+with colC:
+    # Limit state factored load: 1.5(DL + LL)
+    q_factored = 1.5 * (dl_area + ll_area)
+    st.success(f"**Factored Area Load ($q_u$):** {q_factored:.2f} $kN/m^2$")
+
+if st.button("Distribute Loads to Beams", type="primary"):
+    # 1. Determine panel dimensions
+    Lx = min(L_x, L_y)
+    Ly = max(L_x, L_y)
+    aspect_ratio = Ly / Lx
+    
+    # 2. Calculate Equivalent UDLs
+    if aspect_ratio > 2.0:
+        # One-way slab logic
+        w_long = q_factored * (Lx / 2.0)
+        w_short = 0.0
+        slab_type = "One-Way Slab"
+    else:
+        # Two-way slab logic
+        w_short = (q_factored * Lx) / 3.0
+        w_long = (q_factored * Lx / 6.0) * (3.0 - (Lx / Ly)**2)
+        slab_type = "Two-Way Slab"
+        
+    # Map calculated loads based on which axis is longer
+    if L_x == Lx:
+        w_x_beam = w_short
+        w_y_beam = w_long
+    else:
+        w_x_beam = w_long
+        w_y_beam = w_short
+        
+    # 3. Apply loads to the elements dictionary
+    beams_loaded = 0
+    for el in elements:
+        el['load_kN_m'] = 0.0 # initialize
+        if el['type'] == 'Beam':
+            ni = next(n for n in nodes if n['id'] == el['ni'])
+            nj = next(n for n in nodes if n['id'] == el['nj'])
+            
+            # Identify if beam is parallel to X or Y axis
+            if abs(ni['y'] - nj['y']) < 0.01: # Parallel to X-axis
+                # Internal beams take load from two adjacent slabs, perimeter beams take from one.
+                # For simplicity in this base script, we assume a typical internal beam multiplier of 2.
+                # A full script checks neighbor existence.
+                is_perimeter_y = ni['y'] == 0 or ni['y'] == bay_y * L_y
+                multiplier = 1.0 if is_perimeter_y else 2.0
+                el['load_kN_m'] = w_x_beam * multiplier
+                beams_loaded += 1
+                
+            elif abs(ni['x'] - nj['x']) < 0.01: # Parallel to Y-axis
+                is_perimeter_x = ni['x'] == 0 or ni['x'] == bay_x * L_x
+                multiplier = 1.0 if is_perimeter_x else 2.0
+                el['load_kN_m'] = w_y_beam * multiplier
+                beams_loaded += 1
+
+    st.success(f"Successfully distributed {slab_type} loads to {beams_loaded} beams.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Internal X-Beam Load", f"{w_x_beam * 2:.2f} kN/m")
+        st.caption("Perimeter: " + f"{w_x_beam:.2f} kN/m")
+    with col2:
+        st.metric("Internal Y-Beam Load", f"{w_y_beam * 2:.2f} kN/m")
+        st.caption("Perimeter: " + f"{w_y_beam:.2f} kN/m")
+
