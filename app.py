@@ -26,7 +26,6 @@ col_dim = st.sidebar.text_input("Column Size (mm)", "300x450")
 beam_dim = st.sidebar.text_input("Beam Size (mm)", "230x400")
 
 # --- GEOMETRY GENERATOR ---
-# This simulates the logic that would go into your geometry_builder.py
 nodes = []
 elements = []
 
@@ -121,7 +120,7 @@ fig.update_layout(
         xaxis_title='X (m)',
         yaxis_title='Y (m)',
         zaxis_title='Z (m)',
-        aspectmode='data' # Ensures the building doesn't stretch weirdly
+        aspectmode='data' 
     ),
     margin=dict(l=0, r=0, b=0, t=0),
     height=600
