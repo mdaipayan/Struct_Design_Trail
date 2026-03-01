@@ -8,9 +8,9 @@ import json
 # --- PAGE SETUP ---
 st.set_page_config(page_title="IS Code Compliant 3D Frame Designer", layout="wide")
 st.title("🏢 3D Building Frame Analysis & IS-Code Auto-Design")
-st.caption("Strict Compliance: IS 456 (Slenderness, Min Eccentricity, Flexure, Shear), IS 875, IS 1893")
+st.caption("Strict Compliance: IS 456 (Slenderness, Min Eccentricity, Full Beam Detailing), IS 875, IS 1893")
 
-# --- STATE INITIALIZATION (REQUIRED FOR FILE UPLOAD) ---
+# --- STATE INITIALIZATION ---
 if 'init_done' not in st.session_state:
     st.session_state.floors_df = pd.DataFrame({"Floor": [1, 2, 3], "Height (m)": [3.2, 3.0, 3.0]})
     st.session_state.x_grids_df = pd.DataFrame({"Grid_ID": ["A", "B", "C", "D", "E", "F"], "X_Coord (m)": [0.0, 0.115, 4.112, 4.331, 8.039, 9.449]})
@@ -50,7 +50,7 @@ if uploaded_file is not None and st.session_state.loaded_file != uploaded_file.n
 
 # --- SIDEBAR: PARAMETRIC INPUTS ---
 st.sidebar.header("1. Floor Elevations")
-floor_data = st.sidebar.data_editor(st.session_state.floors_df, num_rows="dynamic", width="stretch")
+floor_data = st.sidebar.data_editor(st.session_state.floors_df, num_rows="dynamic", use_container_width=True)
 
 z_elevations = {0: 0.0}
 current_z = 0.0
@@ -61,18 +61,17 @@ num_stories = len(floor_data)
 
 st.sidebar.header("2. Structural Grids (From Plan)")
 with st.sidebar.expander("Define X-Grids", expanded=True):
-    x_grid_data = st.data_editor(st.session_state.x_grids_df, num_rows="dynamic", width="stretch", key="x_grids")
+    x_grid_data = st.data_editor(st.session_state.x_grids_df, num_rows="dynamic", use_container_width=True, key="x_grids")
 
 with st.sidebar.expander("Define Y-Grids", expanded=True):
-    y_grid_data = st.data_editor(st.session_state.y_grids_df, num_rows="dynamic", width="stretch", key="y_grids")
+    y_grid_data = st.data_editor(st.session_state.y_grids_df, num_rows="dynamic", use_container_width=True, key="y_grids")
 
 st.sidebar.header("3. Column Placement")
 x_map = {str(row['Grid_ID']).strip(): float(row['X_Coord (m)']) for _, row in x_grid_data.iterrows() if pd.notna(row['Grid_ID'])}
 y_map = {str(row['Grid_ID']).strip(): float(row['Y_Coord (m)']) for _, row in y_grid_data.iterrows() if pd.notna(row['Grid_ID'])}
 
 with st.sidebar.expander("Column Locations & Orientations", expanded=True):
-    st.info("📝 **How to place columns:**\n* Type exact Grid ID (e.g., A, 1).\n* Angle: `0` (depth on X), `90` (depth on Y).")
-    col_data = st.data_editor(st.session_state.cols_df, num_rows="dynamic", width="stretch")
+    col_data = st.data_editor(st.session_state.cols_df, num_rows="dynamic", use_container_width=True)
 
 st.sidebar.header("4. IS Code Design & Load Parameters")
 col_dim = st.sidebar.text_input("Init Column Size (mm)", str(st.session_state.params["col_dim"]))
@@ -94,25 +93,6 @@ lateral_coeff = lateral_coeff_input / 100.0
 st.sidebar.header("5. AI Optimization")
 auto_optimize = st.sidebar.checkbox("Enable IS 456 Safe Auto-Sizing", value=True)
 allow_ai_restructure = st.sidebar.checkbox("Allow AI Restructuring (3-Stage Recovery)", value=True)
-
-# --- SIDEBAR: PROJECT EXPORT ---
-st.sidebar.divider()
-st.sidebar.header("💾 Save Project")
-def export_project_data():
-    project_data = {
-        "floors": floor_data.to_dict(orient="records"),
-        "x_grids": x_grid_data.to_dict(orient="records"),
-        "y_grids": y_grid_data.to_dict(orient="records"),
-        "columns": col_data.to_dict(orient="records"),
-        "parameters": {
-            "fck": fck, "fy": fy, "sbc": sbc, "col_dim": col_dim, "beam_dim": beam_dim,
-            "live_load": live_load, "floor_finish": floor_finish, "wall_thickness": wall_thickness,
-            "slab_thickness": slab_thickness, "lateral_coeff": lateral_coeff
-        }
-    }
-    return json.dumps(project_data, indent=4)
-
-st.sidebar.download_button(label="⬇️ Download Project Inputs (JSON)", data=export_project_data(), file_name="structural_project.json", mime="application/json", width="stretch")
 
 def safe_float(val, default=0.0):
     try:
@@ -194,48 +174,6 @@ for idx, row in col_data.iterrows():
 secondary_xy = [] 
 nodes, elements = build_geometry(primary_xy, secondary_xy, z_elevations, num_stories, col_dim, beam_dim)
 
-# --- VIEWPORT RENDERING FUNCTION ---
-def render_viewport(view_nodes, view_elements, title="Structural Model Viewport", suffix="1"):
-    st.subheader(title)
-    col_v1, col_v2 = st.columns(2)
-    show_arch_grids = col_v1.checkbox("Show Architectural Grids", value=True, key=f"grid_{suffix}")
-    show_axis = col_v2.checkbox("Show 3D Axis", value=True, key=f"axis_{suffix}")
-
-    fig = go.Figure()
-
-    for el in view_elements:
-        ni = next(n for n in view_nodes if n['id'] == el['ni'])
-        nj = next(n for n in view_nodes if n['id'] == el['nj'])
-        
-        is_secondary = not (ni.get('is_primary', True) and nj.get('is_primary', True))
-        if el['type'] == 'Column': color = 'blue'
-        elif is_secondary: color = '#2ca02c' 
-        else: color = 'red'
-            
-        fig.add_trace(go.Scatter3d(
-            x=[ni['x'], nj['x']], y=[ni['y'], nj['y']], z=[ni['z'], nj['z']],
-            mode='lines', line=dict(color=color, width=4), hoverinfo='text', 
-            text=f"{el['type']} ID:{el['id']}", showlegend=False
-        ))
-
-    if show_arch_grids and x_map and y_map:
-        min_x, max_x, min_y, max_y = min(x_map.values()), max(x_map.values()), min(y_map.values()), max(y_map.values())
-        for grid_id, y_val in y_map.items():
-            fig.add_trace(go.Scatter3d(x=[min_x-1, max_x+1], y=[y_val, y_val], z=[0, 0], mode='lines+text', line=dict(color='gray', width=2, dash='dash'), text=[f"Grid {grid_id}", ''], textposition='middle left', hoverinfo='none', showlegend=False))
-        for grid_id, x_val in x_map.items():
-            fig.add_trace(go.Scatter3d(x=[x_val, x_val], y=[min_y-1, max_y+1], z=[0, 0], mode='lines+text', line=dict(color='gray', width=2, dash='dash'), text=[f"Grid {grid_id}", ''], textposition='bottom center', hoverinfo='none', showlegend=False))
-
-    x_coords = [n['x'] for n in view_nodes]
-    y_coords = [n['y'] for n in view_nodes]
-    z_coords = [n['z'] for n in view_nodes]
-    fig.add_trace(go.Scatter3d(x=x_coords, y=y_coords, z=z_coords, mode='markers', marker=dict(size=3, color='black'), hoverinfo='text', text=[f"Node: {n['id']}" for n in view_nodes], showlegend=False))
-
-    axis_config = dict(showbackground=show_axis, showgrid=show_axis, zeroline=show_axis, showticklabels=show_axis)
-    fig.update_layout(scene=dict(xaxis=dict(**axis_config, title='X' if show_axis else ''), yaxis=dict(**axis_config, title='Y' if show_axis else ''), zaxis=dict(**axis_config, title='Z' if show_axis else ''), aspectmode='data'), margin=dict(l=0, r=0, b=0, t=0), height=500)
-    st.plotly_chart(fig, width="stretch")
-
-render_viewport(nodes, elements, "Initial User Model", "init")
-
 # --- ANALYSIS ENGINE ---
 def get_transformation_matrix(ni, nj):
     dx, dy, dz = nj['x'] - ni['x'], nj['y'] - ni['y'], nj['z'] - ni['z']
@@ -267,7 +205,7 @@ def run_analysis_dynamic(current_elements, current_nodes, optimized_slab_D):
     if num_nodes == 0: return current_elements, np.zeros(0)
     
     F_global = np.zeros(num_nodes * 6)
-    E_conc = 5000 * math.sqrt(fck) * 1e3 # E in kN/m^2
+    E_conc = 5000 * math.sqrt(fck) * 1e3 
     G_conc = E_conc / 2.4 
     
     X_coords, Y_coords = [n['x'] for n in current_nodes], [n['y'] for n in current_nodes]
@@ -415,8 +353,8 @@ def perform_design(elements_to_design, U_global, current_nodes, z_elevations):
         floor_drifts[z] = True if max(drift_x, drift_y) > (0.004 * h_story) else False
             
     for el in elements_to_design:
-        b, h = map(lambda x: float(x), el['size'].split('x'))
-        if el.get('angle', 0) == 90: b, h = h, b 
+        b_mm, h_mm = map(lambda x: float(x), el['size'].split('x'))
+        if el.get('angle', 0) == 90: b_mm, h_mm = h_mm, b_mm 
         
         el['pass'] = True
         el['design_details'] = {}
@@ -430,33 +368,73 @@ def perform_design(elements_to_design, U_global, current_nodes, z_elevations):
             Vu_z = max(abs(el['F_internal'][2]), abs(el['F_internal'][8]))
             Vu_max = max(Vu_y, Vu_z)
             
-            d_beam = h - 40 
-            Mu_lim = mulim_coeff * fck * b * (d_beam**2) / 1e6
-            tau_v = (Vu_max * 1000) / (b * d_beam)
+            d_beam = h_mm - 40 
+            Mu_lim = mulim_coeff * fck * b_mm * (d_beam**2) / 1e6
+            tau_v = (Vu_max * 1000) / (b_mm * d_beam)
             
+            # --- IS 456 BEAM REINFORCEMENT CALCULATION (NEW) ---
+            A_quad = (0.87 * fy * fy) / (b_mm * d_beam * fck)
+            B_quad = -0.87 * fy * d_beam
+            C_quad = Mu_max * 1e6
+            
+            discriminant = B_quad**2 - 4*A_quad*C_quad
+            if discriminant < 0 or Mu_max > Mu_lim:
+                el['failure_mode'] += "flexure "
+                Ast_req = 0
+                num_bars = 0
+            else:
+                Ast1 = (-B_quad + math.sqrt(discriminant)) / (2*A_quad)
+                Ast2 = (-B_quad - math.sqrt(discriminant)) / (2*A_quad)
+                Ast_req = min(Ast1, Ast2) 
+                
+                Ast_min = (0.85 * b_mm * d_beam) / fy
+                Ast_req = max(Ast_req, Ast_min)
+                
+                # Sizing Main Bars (Assuming 16mm typical)
+                bar_dia = 16
+                a_ast = math.pi * (bar_dia**2) / 4
+                num_bars = max(2, math.ceil(Ast_req / a_ast))
+            
+            Ast_prov = num_bars * math.pi * (16**2) / 4 if num_bars > 0 else 0
+            
+            # --- IS 456 SHEAR REINFORCEMENT CALCULATION (NEW) ---
+            pt = min(100 * Ast_prov / (b_mm * d_beam), 3.0) if (b_mm*d_beam) > 0 else 0
+            beta = max(0.8 * fck / (6.89 * pt), 1.0) if pt > 0 else 1.0
+            tau_c = 0.85 * math.sqrt(0.8 * fck) * (math.sqrt(1 + 5 * beta) - 1) / (6 * beta) if pt > 0 else 0
+            tau_c = min(tau_c, tau_c_max)
+            
+            Asv = 2 * (math.pi * (8**2) / 4) # 2-legged 8mm stirrups
+            sv_min = (0.87 * fy * Asv) / (0.4 * b_mm)
+            
+            if tau_v <= tau_c:
+                sv_req = sv_min
+            else:
+                Vus = (Vu_max * 1000) - (tau_c * b_mm * d_beam)
+                sv_calc = (0.87 * fy * Asv * d_beam) / Vus if Vus > 0 else sv_min
+                sv_req = min(sv_calc, sv_min)
+                
+            sv_provided = min(sv_req, 0.75 * d_beam, 300)
+            sv_provided = math.floor(sv_provided / 10) * 10 
+            
+            if tau_v > tau_c_max: el['failure_mode'] += "shear "
+            
+            # Deflection Check
             w_load = el.get('load_kN_m', 0.0)
             delta_ss_m = (5 * w_load * (el['length']**4)) / (384 * el['E'] * el['Iz']) if (el.get('E',0)*el.get('Iz',0)) != 0 else 0
-            delta_ss = abs(delta_ss_m * 1000)
+            delta_rot_m = (el['length'] / 8) * (el.get('u_local', np.zeros(12))[5] - el.get('u_local', np.zeros(12))[11])
+            max_deflection = abs(delta_ss_m * 1000) + abs(delta_rot_m * 1000)
             
-            theta_1, theta_2 = el.get('u_local', np.zeros(12))[5], el.get('u_local', np.zeros(12))[11]
-            delta_rot_m = (el['length'] / 8) * (theta_1 - theta_2)
-            delta_rot = abs(delta_rot_m * 1000)
-            
-            max_deflection = delta_ss + delta_rot
-            L_mm = el['length'] * 1000
-            
-            if max_deflection > (L_mm / 250): el['failure_mode'] += "deflection "
-            if Mu_max > Mu_lim: el['failure_mode'] += "flexure "
-            if tau_v > tau_c_max: el['failure_mode'] += "shear "
+            if max_deflection > (el['length'] * 1000 / 250): el['failure_mode'] += "deflection "
                 
             if el['failure_mode']:
                 el['pass'] = False
                 design_status = False
                 
             el['design_details'] = {
-                'Member ID': el['id'], 'Floor': el['floor'], 'Size (mm)': el['size'],
+                'ID': el['id'], 'Floor': el['floor'], 'Size (mm)': el['size'],
                 'Mu_max (kN.m)': round(Mu_max, 2), 'Vu_max (kN)': round(Vu_max, 2),
-                'Shear τv (MPa)': round(tau_v, 2), 'Deflect (mm)': round(max_deflection, 2), 
+                'Bottom Rebars': f"{num_bars}-16Φ" if num_bars > 0 else "FAIL", 
+                'Stirrups (8mm)': f"2L @ {sv_provided} c/c" if tau_v <= tau_c_max else "FAIL",
                 'Status': 'Safe' if el['pass'] else el['failure_mode'].strip()
             }
                 
@@ -465,33 +443,27 @@ def perform_design(elements_to_design, U_global, current_nodes, z_elevations):
             Mu_y = max(abs(el['F_internal'][4]), abs(el['F_internal'][10]))
             Mu_z = max(abs(el['F_internal'][5]), abs(el['F_internal'][11]))
             
-            # --- IS 456 SLENDERNESS & ECCENTRICITY CHECKS ---
             L_eff = el['length'] * 1000
             
-            # Min Eccentricity (Clause 25.4)
-            e_min_z = max(L_eff / 500 + b / 30, 20.0)
-            e_min_y = max(L_eff / 500 + h / 30, 20.0)
+            e_min_z = max(L_eff / 500 + b_mm / 30, 20.0)
+            e_min_y = max(L_eff / 500 + h_mm / 30, 20.0)
             Mu_z = max(Mu_z, Pu * e_min_z / 1000.0)
             Mu_y = max(Mu_y, Pu * e_min_y / 1000.0)
             
-            # Moment Magnification for Slender Columns (Clause 39.7.1)
-            is_slender_z = (L_eff / b) > 12
-            is_slender_y = (L_eff / h) > 12
+            is_slender_z = (L_eff / b_mm) > 12
+            is_slender_y = (L_eff / h_mm) > 12
             
             if is_slender_z:
-                M_add_z = (Pu * b / 2000.0) * (L_eff / b)**2 / 1000.0
-                Mu_z += M_add_z
+                Mu_z += (Pu * b_mm / 2000.0) * (L_eff / b_mm)**2 / 1000.0
                 el['failure_mode'] += "slender_z "
-                
             if is_slender_y:
-                M_add_y = (Pu * h / 2000.0) * (L_eff / h)**2 / 1000.0
-                Mu_y += M_add_y
+                Mu_y += (Pu * h_mm / 2000.0) * (L_eff / h_mm)**2 / 1000.0
                 el['failure_mode'] += "slender_y "
 
             Mu_max = max(Mu_y, Mu_z)
             
-            Ag = b * h
-            d_col = h - 40
+            Ag = b_mm * h_mm
+            d_col = h_mm - 40
             
             Pu_crushing_limit = (0.4 * fck * Ag + 0.67 * fy * 0.04 * Ag) / 1000.0 
             Asc_req_axial = (Pu * 1000 - 0.4 * fck * Ag) / (0.67 * fy - 0.4 * fck) if (Pu * 1000 > 0.4 * fck * Ag) else 0
@@ -513,7 +485,7 @@ def perform_design(elements_to_design, U_global, current_nodes, z_elevations):
             elif is_slender_y or is_slender_z: status_str = 'Safe (Slender)'
                     
             el['design_details'] = {
-                'Member ID': el['id'], 'Floor': el['floor'], 'Size (mm)': el['size'],
+                'ID': el['id'], 'Floor': el['floor'], 'Size (mm)': el['size'],
                 'Orientation': f"{el.get('angle', 0)}°", 'Pu_max (kN)': round(Pu, 2), 'Mu_max (kN.m)': round(Mu_max, 2),
                 'Req Asc (mm²)': round(max(Asc_calc, 0.008 * Ag), 2),
                 'Status': status_str
@@ -526,25 +498,24 @@ def group_elements(elements_list, elem_type):
     if df.empty: return df
     if elem_type == 'Column':
         grouped = df.groupby(['Floor', 'Size (mm)', 'Orientation']).agg(
-            Max_Pu=('Pu_max (kN)', 'max'), Max_Mu=('Mu_max (kN.m)', 'max'), Max_Req_Asc=('Req Asc (mm²)', 'max'), Member_Count=('Member ID', 'count')
+            Max_Pu=('Pu_max (kN)', 'max'), Max_Mu=('Mu_max (kN.m)', 'max'), Max_Req_Asc=('Req Asc (mm²)', 'max'), Count=('ID', 'count')
         ).reset_index()
         grouped['Group ID'] = [f"C{i+1}" for i in range(len(grouped))]
         return grouped
     elif elem_type == 'Beam':
-        grouped = df.groupby(['Floor', 'Size (mm)']).agg(
-            Max_Mu=('Mu_max (kN.m)', 'max'), Max_Vu=('Vu_max (kN)', 'max'), Max_Deflect=('Deflect (mm)', 'max'), Member_Count=('Member ID', 'count')
+        grouped = df.groupby(['Floor', 'Size (mm)', 'Bottom Rebars', 'Stirrups (8mm)']).agg(
+            Max_Mu=('Mu_max (kN.m)', 'max'), Max_Vu=('Vu_max (kN)', 'max'), Count=('ID', 'count')
         ).reset_index()
         grouped['Group ID'] = [f"B{i+1}" for i in range(len(grouped))]
         return grouped
 
 # --- MAIN EXECUTION BLOCK (3-STAGE AI) ---
-if st.button("Run 3-Stage AI Optimization & Design", type="primary", width="stretch"):
+if st.button("Run 3-Stage AI Optimization & Design", type="primary", use_container_width=True):
     with st.spinner("Analyzing Frame & Designing Slabs..."):
         if len(nodes) < 2:
             st.error("Not enough valid nodes generated. Please check your grid definitions.")
             st.stop()
             
-        # --- 0. SMART SLAB DESIGN & OPTIMIZATION (IS 456) ---
         x_coords = sorted(list(x_map.values()))
         y_coords = sorted(list(y_map.values()))
         x_spans = [x_coords[i+1] - x_coords[i] for i in range(len(x_coords)-1) if (x_coords[i+1] - x_coords[i]) > 0.5]
@@ -574,16 +545,14 @@ if st.button("Run 3-Stage AI Optimization & Design", type="primary", width="stre
         passed_phase1, passed_phase2, passed_phase3 = False, False, False
         max_iters = 12 
         
-        # --- PHASE 1: SMART SIZING (HEURISTIC DIAGNOSTICS) ---
         iteration = 1
         while iteration <= max_iters:
             try:
                 elements, U_global_res = run_analysis_dynamic(elements, nodes, opt_slab_thickness)
                 elements, passed_phase1 = perform_design(elements, U_global_res, nodes, z_elevations)
-                max_def = np.max(np.abs(U_global_res)) if len(U_global_res) > 0 else 0.0
                 
                 if passed_phase1 or not auto_optimize:
-                    if passed_phase1: st.success(f"✅ Phase 1: Initial Topology achieved 100% Safe Design in {iteration} iteration(s). Max Deflection: {max_def*1000:.2f} mm")
+                    if passed_phase1: st.success(f"✅ Phase 1: 100% Safe Design in {iteration} iteration(s).")
                     break
                 else:
                     for el in elements:
@@ -606,16 +575,15 @@ if st.button("Run 3-Stage AI Optimization & Design", type="primary", width="stre
                                         if h - b > 200: b += 50 
                                 else: b += 50; h += 50
                             
-                            b, h = min(b, 1000), min(h, 1200) # Hard limits before moving to Phase 2
+                            b, h = min(b, 1000), min(h, 1200) 
                             el['size'] = f"{b}x{h}"
                     iteration += 1
             except Exception as e:
                 st.error(f"Solver Error: {e}")
                 st.stop()
 
-        # --- PHASE 2: SECONDARY BEAM INJECTION ---
         if not passed_phase1 and allow_ai_restructure:
-            st.warning("⚠️ Phase 1 limits reached. Beams remain overstressed. AI is injecting Secondary Beams...")
+            st.warning("⚠️ Phase 1 limits reached. Injecting Secondary Beams...")
             added_sec_nodes = 0
             for el in elements:
                 if el['type'] == 'Beam' and not el['pass'] and el['length'] > 4.5:
@@ -628,9 +596,7 @@ if st.button("Run 3-Stage AI Optimization & Design", type="primary", width="stre
                         added_sec_nodes += 1
                             
             if added_sec_nodes > 0:
-                
                 ai_nodes, ai_elements = build_geometry(primary_xy, secondary_xy, z_elevations, num_stories, col_dim, beam_dim)
-                
                 ai_iters = 1
                 while ai_iters <= 10: 
                     ai_elements, U_global_res = run_analysis_dynamic(ai_elements, ai_nodes, opt_slab_thickness)
@@ -638,7 +604,6 @@ if st.button("Run 3-Stage AI Optimization & Design", type="primary", width="stre
                     if passed_phase2:
                         st.success(f"✅ Phase 2 Successful! Secondary beams stabilized the structure.")
                         nodes, elements = ai_nodes, ai_elements
-                        render_viewport(nodes, elements, "🤖 Phase 2 Model (Green = Secondary Beams)", "ai2")
                         break
                     else:
                         for el in ai_elements:
@@ -647,24 +612,16 @@ if st.button("Run 3-Stage AI Optimization & Design", type="primary", width="stre
                                 b, h = min(int(b_str)+50, 1000), min(int(h_str)+50, 1200)
                                 el['size'] = f"{b}x{h}"
                     ai_iters += 1
-                
-                if not passed_phase2:
-                    nodes, elements = ai_nodes, ai_elements # Transfer failed state to Phase 3
-            else:
-                passed_phase2 = False 
+                if not passed_phase2: nodes, elements = ai_nodes, ai_elements
 
-        # --- PHASE 3: DEEP RESTRUCTURING (PRIMARY COLUMNS) ---
         if not passed_phase1 and not passed_phase2 and allow_ai_restructure:
-            st.error("⚠️ Phase 2 failed (Primary beams cannot hold secondary point loads). AI is executing Deep Restructuring...")
-            
+            st.error("⚠️ Phase 2 failed. Deep Restructuring...")
             hard_primary_xy = list(primary_xy)
             added_cols = 0
-            
             for pt in secondary_xy:
                 if not any(math.sqrt((p['x']-pt['x'])**2 + (p['y']-pt['y'])**2) < 1.0 for p in hard_primary_xy):
                     hard_primary_xy.append({'x': pt['x'], 'y': pt['y'], 'angle': 0.0})
                     added_cols += 1
-
             for el in elements:
                 if el['type'] == 'Beam' and not el['pass'] and el['length'] > 4.0:
                     ni = next(n for n in nodes if n['id'] == el['ni'])
@@ -675,15 +632,13 @@ if st.button("Run 3-Stage AI Optimization & Design", type="primary", width="stre
                         added_cols += 1
 
             if added_cols > 0:
-                
                 hard_nodes, hard_elements = build_geometry(hard_primary_xy, [], z_elevations, num_stories, col_dim, beam_dim)
-                
                 hard_iters = 1
                 while hard_iters <= 10:
                     hard_elements, U_global_res = run_analysis_dynamic(hard_elements, hard_nodes, opt_slab_thickness)
                     hard_elements, passed_phase3 = perform_design(hard_elements, U_global_res, hard_nodes, z_elevations)
                     if passed_phase3:
-                        st.success(f"✅ Phase 3 Deep Restructuring Successful! Added full-height primary columns. 100% Safe Design Guaranteed.")
+                        st.success(f"✅ Phase 3 Deep Restructuring Successful!")
                         break
                     else:
                         for el in hard_elements:
@@ -692,119 +647,18 @@ if st.button("Run 3-Stage AI Optimization & Design", type="primary", width="stre
                                 b, h = min(int(b_str)+50, 1000), min(int(h_str)+50, 1200)
                                 el['size'] = f"{b}x{h}"
                     hard_iters += 1
-                
                 nodes, elements = hard_nodes, hard_elements
-                render_viewport(nodes, elements, "🏗️ Phase 3 Deep Restructured Model (New Columns added)", "hard3")
-            else:
-                st.info("🧠 AI could not safely inject columns without severe crowding. Manual layout review required.")
 
-        # --- 5. BOQ & RESULTS GENERATION (Uses final survived nodes/elements) ---
-        slabs = []
-        for z in range(1, num_stories + 1):
-            slabs.append({
-                'Floor': z, 'Max Grid Dim (m)': f"{round(Lx,2)} x {round(Ly,2)}",
-                'Behavior': slab_behavior, 'Thickness (mm)': opt_slab_thickness, 'Status': 'Safe'
-            })
-                    
-        base_nodes = [n for n in nodes if n['z'] == 0]
-        footings = []
-        pad_footings_dict = {}
-
-        for n in base_nodes:
-            conn_col = next((e for e in elements if e['ni'] == n['id'] and e['type'] == 'Column'), None)
-            if conn_col:
-                Pu = max(abs(conn_col['F_internal'][0]), abs(conn_col['F_internal'][6]))
-                pad_footings_dict[n['id']] = {'Pu': Pu, 'side': math.ceil(math.sqrt((Pu / 1.5 * 1.1) / sbc) * 10) / 10, 'x': n['x'], 'y': n['y']}
-
-        processed_nodes = set()
-        footing_id = 1
-        for n1_id, f1 in pad_footings_dict.items():
-            if n1_id in processed_nodes: continue
-            combined_with = [n2_id for n2_id, f2 in pad_footings_dict.items() if n1_id != n2_id and n2_id not in processed_nodes and math.sqrt((f1['x'] - f2['x'])**2 + (f1['y'] - f2['y'])**2) < (f1['side']/2 + f2['side']/2)]
-            
-            if combined_with:
-                group = [n1_id] + combined_with
-                L_comb = max([pad_footings_dict[nid]['x'] for nid in group]) - min([pad_footings_dict[nid]['x'] for nid in group]) + max([pad_footings_dict[nid]['side'] for nid in group])
-                B_comb = max(sum((pad_footings_dict[nid]['Pu'] / 1.5 * 1.1) / sbc for nid in group) / L_comb, max([pad_footings_dict[nid]['side'] for nid in group]))
-                footings.append({'ID': f"CF-{footing_id}", 'Type': 'Combined', 'Total Pu (kN)': round(sum(pad_footings_dict[nid]['Pu'] for nid in group), 2), 'Provided L x B (m)': f"{round(L_comb,1)} x {round(B_comb,1)}", 'Depth (mm)': max(400, int(B_comb * 1000 / 3)), 'Status': 'Safe'})
-                processed_nodes.update(group)
-            else:
-                footings.append({'ID': f"F-{footing_id}", 'Type': 'Isolated Pad', 'Total Pu (kN)': round(f1['Pu'], 2), 'Provided L x B (m)': f"{f1['side']} x {f1['side']}", 'Depth (mm)': max(300, int(f1['side'] * 1000 / 4)), 'Status': 'Safe'})
-            processed_nodes.add(n1_id)
-            footing_id += 1
-
+        # --- OUTPUT GENERATION ---
         st.divider()
-        st.header("5. Material Abstract & BoQ")
-        materials = []
-        total_conc, total_steel = 0, 0
-        X_coords, Y_coords = [n['x'] for n in nodes], [n['y'] for n in nodes]
-        approx_floor_area = (max(X_coords) - min(X_coords)) * (max(Y_coords) - min(Y_coords)) * 0.85 if X_coords else 0
-        
-        for z in range(num_stories + 1):
-            conc_vol, steel_wt = 0, 0
-            for el in [el for el in elements if el['floor'] == z]:
-                b, h = map(lambda x: float(x)/1000, el['size'].split('x'))
-                vol = b * h * el['length']
-                conc_vol += vol
-                steel_wt += vol * 7850 * (0.015 if el['type'] == 'Column' else 0.012)
-            
-            slab_vol = approx_floor_area * (opt_slab_thickness/1000) if z > 0 else 0
-            conc_vol += slab_vol
-            steel_wt += slab_vol * 7850 * 0.008
-            total_conc += conc_vol; total_steel += steel_wt
-            if conc_vol > 0: materials.append({"Floor": f"Level {z}", "Concrete (m³)": round(conc_vol, 2), "Steel (kg)": round(steel_wt, 2)})
-                
-        colA, colB = st.columns(2)
-        colA.dataframe(pd.DataFrame(materials), width="stretch")
-        colB.metric("Total Concrete Volume", f"{total_conc:.2f} m³")
-        colB.metric("Total Rebar Weight", f"{total_steel / 1000:.2f} MT")
-
-        st.divider()
-        st.header("6. Detailed Results & Grouping")
+        st.header("Results & Structural Detailing")
         
         col_grp1, col_grp2 = st.columns(2)
-        col_grp1.subheader("Beam Groups")
-        col_grp1.dataframe(group_elements(elements, 'Beam'), width="stretch")
-        col_grp2.subheader("Column Groups")
-        col_grp2.dataframe(group_elements(elements, 'Column'), width="stretch")
+        col_grp1.subheader("Beam Reinforcement Schedule")
+        col_grp1.dataframe(group_elements(elements, 'Beam'), use_container_width=True)
+        col_grp2.subheader("Column Grouping Schedule")
+        col_grp2.dataframe(group_elements(elements, 'Column'), use_container_width=True)
 
-        tab1, tab2, tab3, tab4 = st.tabs(["Slabs", "Beams", "Columns", "Footings"])
-        tab1.dataframe(pd.DataFrame(slabs), width="stretch")
-        tab2.dataframe(pd.DataFrame([el['design_details'] for el in elements if el['type'] == 'Beam']), width="stretch")
-        tab3.dataframe(pd.DataFrame([el['design_details'] for el in elements if el['type'] == 'Column']), width="stretch")
-        tab4.dataframe(pd.DataFrame(footings), width="stretch")
-
-        st.divider()
-        st.header("7. Foundation Economics: Pad vs. Pile (IS 2911 Base)")
-        col_rates1, col_rates2, col_rates3 = st.columns(3)
-        rate_conc = col_rates1.number_input("Concrete Rate (per m³)", value=6000.0)
-        rate_steel = col_rates2.number_input("Steel Rate (per kg)", value=65.0)
-        d_pile = col_rates3.selectbox("Pile Shaft Dia (m)", [0.25, 0.30, 0.40], index=1)
-
-        vol_pad_total = sum([float(f['Provided L x B (m)'].split(' x ')[0]) * float(f['Provided L x B (m)'].split(' x ')[1]) * (f['Depth (mm)']/1000) for f in footings])
-        cost_pad = (vol_pad_total * rate_conc) + (vol_pad_total * 7850 * 0.008 * rate_steel)
-
-        FOS, N_c, alpha = 2.5, 9.0, 0.5 
-        c_u = (sbc * FOS) / N_c 
-        safe_end_bearing = (c_u * N_c * ((math.pi / 4) * ((2.5 * d_pile)**2))) / FOS
-        safe_friction_per_m = (alpha * c_u * (math.pi * d_pile)) / FOS
-
-        vol_pile_total = 0.0
-        pile_details = []
-        for n in base_nodes:
-            conn_col = next((e for e in elements if e['ni'] == n['id'] and e['type'] == 'Column'), None)
-            if conn_col:
-                Pu = max(abs(conn_col['F_internal'][0]), abs(conn_col['F_internal'][6]))
-                L_pile = max(3.0, round(((Pu - safe_end_bearing) / safe_friction_per_m if (Pu - safe_end_bearing) > 0 else 0), 1)) 
-                v_total_node = ((math.pi / 4) * (d_pile**2) * L_pile) + ((math.pi / 6) * ((2.5 * d_pile)**3 - d_pile**3))
-                vol_pile_total += v_total_node
-                pile_details.append({'Node': n['id'], 'Pu (kN)': round(Pu,1), 'Req. Length (m)': L_pile, 'Vol (m³)': round(v_total_node, 2)})
-
-        cost_pile = (vol_pile_total * rate_conc) + (vol_pile_total * 7850 * 0.015 * rate_steel)
-
-        st.write(f"**Pad/Combined Foundation Est.:** ₹ {cost_pad:,.2f} (Vol: {vol_pad_total:.1f} m³)")
-        st.write(f"**Under-Reamed Pile Foundation Est.:** ₹ {cost_pile:,.2f} (Vol: {vol_pile_total:.1f} m³)")
-
-        if cost_pile < cost_pad: st.success("💡 Recommendation: Under-Reamed Piles are more economical.")
-        else: st.info("💡 Recommendation: Standard Pad/Combined footings are more economical.")
-        with st.expander("View Dynamic Pile Lengths per Column"): st.dataframe(pd.DataFrame(pile_details), width="stretch")
+        tab1, tab2 = st.tabs(["Raw Beams", "Raw Columns"])
+        tab1.dataframe(pd.DataFrame([el['design_details'] for el in elements if el['type'] == 'Beam']), use_container_width=True)
+        tab2.dataframe(pd.DataFrame([el['design_details'] for el in elements if el['type'] == 'Column']), use_container_width=True)
