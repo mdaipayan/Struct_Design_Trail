@@ -8,7 +8,7 @@ import json
 # --- PAGE SETUP ---
 st.set_page_config(page_title="IS Code Compliant 3D Frame Designer", layout="wide")
 st.title("🏢 3D Building Frame Analysis & IS-Code Auto-Design")
-st.caption("Strict Compliance: IS 456 (Flexure, Shear, Deflection), IS 875, IS 1893 (Storey Drift)")
+st.caption("Strict Compliance: IS 456 (Slenderness, Min Eccentricity, Flexure, Shear), IS 875, IS 1893")
 
 # --- STATE INITIALIZATION (REQUIRED FOR FILE UPLOAD) ---
 if 'init_done' not in st.session_state:
@@ -434,7 +434,6 @@ def perform_design(elements_to_design, U_global, current_nodes, z_elevations):
             Mu_lim = mulim_coeff * fck * b * (d_beam**2) / 1e6
             tau_v = (Vu_max * 1000) / (b * d_beam)
             
-            # --- PRECISE BEAM DEFLECTION CHECK (L/250) ---
             w_load = el.get('load_kN_m', 0.0)
             delta_ss_m = (5 * w_load * (el['length']**4)) / (384 * el['E'] * el['Iz']) if (el.get('E',0)*el.get('Iz',0)) != 0 else 0
             delta_ss = abs(delta_ss_m * 1000)
@@ -465,6 +464,30 @@ def perform_design(elements_to_design, U_global, current_nodes, z_elevations):
             Pu = max(abs(el['F_internal'][0]), abs(el['F_internal'][6]))
             Mu_y = max(abs(el['F_internal'][4]), abs(el['F_internal'][10]))
             Mu_z = max(abs(el['F_internal'][5]), abs(el['F_internal'][11]))
+            
+            # --- IS 456 SLENDERNESS & ECCENTRICITY CHECKS ---
+            L_eff = el['length'] * 1000
+            
+            # Min Eccentricity (Clause 25.4)
+            e_min_z = max(L_eff / 500 + b / 30, 20.0)
+            e_min_y = max(L_eff / 500 + h / 30, 20.0)
+            Mu_z = max(Mu_z, Pu * e_min_z / 1000.0)
+            Mu_y = max(Mu_y, Pu * e_min_y / 1000.0)
+            
+            # Moment Magnification for Slender Columns (Clause 39.7.1)
+            is_slender_z = (L_eff / b) > 12
+            is_slender_y = (L_eff / h) > 12
+            
+            if is_slender_z:
+                M_add_z = (Pu * b / 2000.0) * (L_eff / b)**2 / 1000.0
+                Mu_z += M_add_z
+                el['failure_mode'] += "slender_z "
+                
+            if is_slender_y:
+                M_add_y = (Pu * h / 2000.0) * (L_eff / h)**2 / 1000.0
+                Mu_y += M_add_y
+                el['failure_mode'] += "slender_y "
+
             Mu_max = max(Mu_y, Mu_z)
             
             Ag = b * h
@@ -484,12 +507,16 @@ def perform_design(elements_to_design, U_global, current_nodes, z_elevations):
             elif Asc_calc > 0.04 * Ag: 
                 el['failure_mode'] += "steel_limit "
                 el['pass'] = False; design_status = False
+                
+            status_str = 'Safe'
+            if not el['pass']: status_str = el['failure_mode'].strip()
+            elif is_slender_y or is_slender_z: status_str = 'Safe (Slender)'
                     
             el['design_details'] = {
                 'Member ID': el['id'], 'Floor': el['floor'], 'Size (mm)': el['size'],
                 'Orientation': f"{el.get('angle', 0)}°", 'Pu_max (kN)': round(Pu, 2), 'Mu_max (kN.m)': round(Mu_max, 2),
                 'Req Asc (mm²)': round(max(Asc_calc, 0.008 * Ag), 2),
-                'Status': 'Safe' if el['pass'] else el['failure_mode'].strip()
+                'Status': status_str
             }
                     
     return elements_to_design, design_status
@@ -572,8 +599,11 @@ if st.button("Run 3-Stage AI Optimization & Design", type="primary", use_contain
                             else: 
                                 if 'axial_crushing' in mode or 'drift' in mode: b += 50; h += 50
                                 elif 'steel_limit' in mode:
-                                    h += 50 
-                                    if h - b > 200: b += 50 
+                                    if 'slender_z' in mode: b += 50
+                                    if 'slender_y' in mode: h += 50
+                                    if 'slender_z' not in mode and 'slender_y' not in mode:
+                                        h += 50 
+                                        if h - b > 200: b += 50 
                                 else: b += 50; h += 50
                             
                             b, h = min(b, 1000), min(h, 1200) # Hard limits before moving to Phase 2
